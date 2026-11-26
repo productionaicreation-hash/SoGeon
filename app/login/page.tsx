@@ -27,7 +27,7 @@ export default function LoginPage() {
     if (error) {
       setMessage(error.message);
     } else {
-      window.location.href = "/dashboard";
+      window.location.href = "/feed";
     }
   }
 
@@ -74,7 +74,10 @@ export default function LoginPage() {
         display: "grid",
         gap: 18
       }}>
-        <h1 style={{color:"#FFD600", textAlign:"center"}}>
+        <h1 style={{
+          color: "#FFD600",
+          textAlign: "center"
+        }}>
           SoGeon Login
         </h1>
 
@@ -86,7 +89,7 @@ export default function LoginPage() {
           required
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          style={{padding:15, borderRadius:8}}
+          style={{ padding: 15, borderRadius: 8 }}
         />
 
         <input
@@ -95,15 +98,15 @@ export default function LoginPage() {
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          style={{padding:15, borderRadius:8}}
+          style={{ padding: 15, borderRadius: 8 }}
         />
 
         <button disabled={loading} style={{
-          padding:16,
-          background:"#FFD600",
-          border:0,
-          borderRadius:8,
-          fontWeight:"bold"
+          padding: 16,
+          background: "#FFD600",
+          border: 0,
+          borderRadius: 8,
+          fontWeight: "bold"
         }}>
           {loading ? "Signing in..." : "Sign In"}
         </button>
@@ -126,11 +129,10 @@ export default function LoginPage() {
 
         {message && <p>{message}</p>}
 
-        <a href="/signup" style={{color:"#FFD600"}}>
+        <a href="/signup" style={{ color: "#FFD600" }}>
           Don't have an account? Sign up
         </a>
       </form>
     </main>
   );
       }
-        
