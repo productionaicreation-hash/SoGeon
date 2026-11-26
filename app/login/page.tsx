@@ -31,6 +31,33 @@ export default function LoginPage() {
     }
   }
 
+  async function forgotPassword() {
+    if (!email.trim()) {
+      setMessage("Please enter your email address first.");
+      return;
+    }
+
+    setLoading(true);
+    setMessage("");
+
+    const supabase = createClient();
+
+    const { error } = await supabase.auth.resetPasswordForEmail(
+      email.trim(),
+      {
+        redirectTo: `${window.location.origin}/reset-password`,
+      }
+    );
+
+    setLoading(false);
+
+    if (error) {
+      setMessage(error.message);
+    } else {
+      setMessage("Password reset email sent! Check your inbox.");
+    }
+  }
+
   return (
     <main style={{
       minHeight: "100vh",
@@ -81,6 +108,22 @@ export default function LoginPage() {
           {loading ? "Signing in..." : "Sign In"}
         </button>
 
+        <button
+          type="button"
+          onClick={forgotPassword}
+          disabled={loading}
+          style={{
+            background: "transparent",
+            border: 0,
+            color: "#FFD600",
+            textAlign: "right",
+            cursor: "pointer",
+            fontSize: 14
+          }}
+        >
+          Forgot Password?
+        </button>
+
         {message && <p>{message}</p>}
 
         <a href="/signup" style={{color:"#FFD600"}}>
@@ -89,5 +132,5 @@ export default function LoginPage() {
       </form>
     </main>
   );
-}
-  
+      }
+        
