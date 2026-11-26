@@ -10,6 +10,8 @@ export default function Dashboard() {
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -29,7 +31,7 @@ export default function Dashboard() {
 
       const { data: profile, error } = await supabase
         .from("profiles")
-        .select("username, display_name, bio")
+        .select("username, display_name, bio, avatar_url")
         .eq("id", data.user.id)
         .maybeSingle();
 
@@ -39,10 +41,9 @@ export default function Dashboard() {
         setUsername(profile.username || "");
         setDisplayName(profile.display_name || "");
         setBio(profile.bio || "");
+        setAvatarUrl(profile.avatar_url || "");
       } else {
-        setDisplayName(
-          data.user.email?.split("@")[0] || ""
-        );
+        setDisplayName(data.user.email?.split("@")[0] || "");
       }
 
       setLoading(false);
@@ -58,23 +59,58 @@ export default function Dashboard() {
     setMessage("");
 
     const supabase = createClient();
+    let newAvatarUrl = avatarUrl;
 
-    const { error } = await supabase
-      .from("profiles")
-      .upsert(
-        {
+    try {
+      if (photo) {
+        if (!["image/jpeg", "image/png", "image/webp"].includes(photo.type)) {
+          setMessage("Please choose a JPG, PNG or WEBP image.");
+          setSaving(false);
+          return;
+        }
+
+        if (photo.size > 2 * 1024 * 1024) {
+          setMessage("Photo must be smaller than 2 MB.");
+          setSaving(false);
+          return;
+        }
+
+        const filePath = `${userId}/${Date.now()}-${photo.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from("avatars")
+          .upload(filePath, photo, {
+            cacheControl: "3600",
+            upsert: false,
+            contentType: photo.type
+          });
+
+        if (uploadError) throw uploadError;
+
+        const { data: publicData } = supabase.storage
+          .from("avatars")
+          .getPublicUrl(filePath);
+
+        newAvatarUrl = publicData.publicUrl;
+      }
+
+      const { error } = await supabase
+        .from("profiles")
+        .upsert({
           id: userId,
           username: username.trim() || null,
           display_name: displayName.trim(),
           bio: bio.trim(),
-        },
-        { onConflict: "id" }
-      );
+          avatar_url: newAvatarUrl || null
+        }, { onConflict: "id" });
 
-    if (error) {
+      if (error) throw error;
+
+      setAvatarUrl(newAvatarUrl);
+      setPhoto(null);
+      setMessage("Profile and photo saved successfully!");
+    } catch (error: any) {
       setMessage("Error: " + error.message);
-    } else {
-      setMessage("Profile saved successfully!");
     }
 
     setSaving(false);
@@ -88,12 +124,7 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <main style={{
-        background: "#080808",
-        color: "white",
-        minHeight: "100vh",
-        padding: 30
-      }}>
+      <main style={{ background: "#080808", color: "white", minHeight: "100vh", padding: 30 }}>
         Loading SoGeon...
       </main>
     );
@@ -107,26 +138,51 @@ export default function Dashboard() {
       padding: 25,
       fontFamily: "Arial"
     }}>
-      <h1 style={{
-        color: "#FFD600",
-        fontSize: 35
-      }}>
+      <h1 style={{ color: "#FFD600", fontSize: 35 }}>
         SoGeon.
       </h1>
 
       <h2>Welcome to your dashboard!</h2>
+      <p style={{ color: "#bbbbbb" }}>Signed in as: {email}</p>
 
-      <p style={{ color: "#bbbbbb" }}>
-        Signed in as: {email}
-      </p>
-
-      <section style={{
-        background: "#191919",
-        padding: 25,
-        borderRadius: 15,
-        marginTop: 25
-      }}>
+      <section style={sectionStyle}>
         <h2>My Profile</h2>
+
+        <div style={{ textAlign: "center", marginBottom: 25 }}>
+          {avatarUrl ? (
+            <img
+              src={avatarUrl}
+              alt="Profile picture"
+              style={avatarStyle}
+            />
+          ) : (
+            <div style={{
+              ...avatarStyle,
+              display: "flex",
+              justifyContent: "center",
+              alignItems: "center",
+              fontSize: 45,
+              background: "#333"
+            }}>
+              👤
+            </div>
+          )}
+
+          <p>Profile Picture</p>
+
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            onChange={(e) => setPhoto(e.target.files?.[0] || null)}
+            style={{ maxWidth: "100%" }}
+          />
+
+          {photo && (
+            <p style={{ color: "#FFD600" }}>
+              Selected: {photo.name}
+            </p>
+          )}
+        </div>
 
         <label>Username</label>
         <input
@@ -162,31 +218,36 @@ export default function Dashboard() {
         </button>
 
         {message && (
-          <p style={{ color: "#FFD600" }}>
-            {message}
-          </p>
+          <p style={{ color: "#FFD600" }}>{message}</p>
         )}
       </section>
 
-      <section style={{
-        background: "#191919",
-        padding: 25,
-        borderRadius: 15,
-        marginTop: 20
-      }}>
+      <section style={sectionStyle}>
         <h2>Your SoGeon account</h2>
         <p>Your digital world starts here.</p>
       </section>
 
-      <button
-        onClick={logout}
-        style={buttonStyle}
-      >
+      <button onClick={logout} style={buttonStyle}>
         Sign Out
       </button>
     </main>
   );
 }
+
+const sectionStyle = {
+  background: "#191919",
+  padding: 25,
+  borderRadius: 15,
+  marginTop: 25
+};
+
+const avatarStyle = {
+  width: 130,
+  height: 130,
+  borderRadius: "50%",
+  objectFit: "cover" as const,
+  border: "3px solid #FFD600"
+};
 
 const inputStyle = {
   display: "block",
@@ -212,4 +273,4 @@ const buttonStyle = {
   fontWeight: "bold" as const,
   cursor: "pointer"
 };
-    
+          
