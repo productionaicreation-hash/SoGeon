@@ -1,6 +1,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { notFound } from "next/navigation";
+import FollowButton from "./FollowButton";
 
 type Props = {
   params: Promise<{ username: string }>;
@@ -12,7 +13,7 @@ export default async function PublicProfile({ params }: Props) {
 
   const { data: profile, error } = await supabase
     .from("profiles")
-    .select("username, display_name, bio, avatar_url")
+    .select("id, username, display_name, bio, avatar_url")
     .eq("username", decodeURIComponent(username))
     .maybeSingle();
 
@@ -55,8 +56,10 @@ export default async function PublicProfile({ params }: Props) {
       <p>@{profile.username}</p>
       <p>{profile.bio || "Welcome to my SoGeon profile!"}</p>
 
+      <FollowButton targetUserId={profile.id} />
+
+      <br />
       <a href="/">Visit SoGeon</a>
     </main>
   );
-    }
-      
+      }
