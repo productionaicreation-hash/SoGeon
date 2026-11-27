@@ -22,26 +22,23 @@ type Post = {
   liked: boolean;
 };
 
-type Tab = "forYou" | "following" | "community";
-
 export default function FeedPage() {
   const supabase = createClient();
 
   const [posts, setPosts] = useState<Post[]>([]);
   const [userId, setUserId] = useState("");
   const [followingIds, setFollowingIds] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState("For You");
   const [loading, setLoading] = useState(true);
-
-  const [activeTab, setActiveTab] = useState<Tab>("forYou");
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [search, setSearch] = useState("");
-
   const [showComposer, setShowComposer] = useState(false);
   const [content, setContent] = useState("");
-  const [videoUrl, setVideoUrl] = useState("");
   const [image, setImage] = useState<File | null>(null);
+  const [video, setVideo] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState("");
   const [posting, setPosting] = useState(false);
   const [message, setMessage] = useState("");
+  const [search, setSearch] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
 
   async function loadPosts() {
     const { data: auth } = await supabase.auth.getUser();
@@ -58,9 +55,7 @@ export default function FeedPage() {
       .select("following_id")
       .eq("follower_id", auth.user.id);
 
-    setFollowingIds(
-      (follows || []).map((item) => item.following_id)
-    );
+    setFollowingIds((follows || []).map((f) => f.following_id));
 
     const { data, error } = await supabase
       .from("posts")
@@ -73,7 +68,7 @@ export default function FeedPage() {
       return;
     }
 
-    const postList = await Promise.all(
+    const results = await Promise.all(
       (data || []).map(async (post) => {
         const { data: profile } = await supabase
           .from("profiles")
@@ -108,7 +103,7 @@ export default function FeedPage() {
       })
     );
 
-    setPosts(postList);
+    setPosts(results);
     setLoading(false);
   }
 
@@ -119,13 +114,13 @@ export default function FeedPage() {
   async function createPost(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
 
-    if (!content.trim() && !image && !videoUrl.trim()) {
-      setMessage("Write something or add a photo or video URL.");
+    if (!content.trim() && !image && !video && !videoUrl.trim()) {
+      setMessage("Add a caption, photo or video first.");
       return;
     }
 
-    if (image && videoUrl.trim()) {
-      setMessage("Choose a photo OR a video URL, not both.");
+    if ([image, video, videoUrl.trim() ? true : null].filter(Boolean).length > 1) {
+      setMessage("Choose only one photo or video.");
       return;
     }
 
@@ -133,11 +128,11 @@ export default function FeedPage() {
     setMessage("");
 
     let imageUrl: string | null = null;
-    let cleanVideoUrl: string | null = null;
+    let finalVideoUrl: string | null = null;
 
     if (image) {
       if (!["image/jpeg", "image/png", "image/webp"].includes(image.type)) {
-        setMessage("Use a JPG, PNG or WEBP image.");
+        setMessage("Choose a JPG, PNG or WEBP photo.");
         setPosting(false);
         return;
       }
@@ -148,35 +143,63 @@ export default function FeedPage() {
         return;
       }
 
-      const filePath =
-        `${userId}/${Date.now()}-${image.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+      const path = `${userId}/${Date.now()}-${image.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
 
-      const { error: uploadError } = await supabase.storage
+      const { error } = await supabase.storage
         .from("avatars")
-        .upload(filePath, image);
+        .upload(path, image);
 
-      if (uploadError) {
-        setMessage(uploadError.message);
+      if (error) {
+        setMessage(error.message);
         setPosting(false);
         return;
       }
 
-      const { data: publicData } = supabase.storage
-        .from("avatars")
-        .getPublicUrl(filePath);
+      imageUrl = supabase.storage.from("avatars").getPublicUrl(path).data.publicUrl;
+    }
 
-      imageUrl = publicData.publicUrl;
+    if (video) {
+      const allowed = ["video/mp4", "video/quicktime", "video/webm"];
+
+      if (!allowed.includes(video.type)) {
+        setMessage("Choose an MP4, MOV or WEBM video.");
+        setPosting(false);
+        return;
+      }
+
+      if (video.size > 50 * 1024 * 1024) {
+        setMessage("Video must be smaller than 50 MB.");
+        setPosting(false);
+        return;
+      }
+
+      const path = `${userId}/${Date.now()}-${video.name.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+
+      const { error } = await supabase.storage
+        .from("videos")
+        .upload(path, video, {
+          contentType: video.type,
+          upsert: false,
+        });
+
+      if (error) {
+        setMessage(error.message);
+        setPosting(false);
+        return;
+      }
+
+      finalVideoUrl = supabase.storage
+        .from("videos")
+        .getPublicUrl(path).data.publicUrl;
     }
 
     if (videoUrl.trim()) {
       try {
         const parsed = new URL(videoUrl.trim());
-
         if (!["http:", "https:"].includes(parsed.protocol)) {
-          throw new Error("Invalid video URL");
+          throw new Error();
         }
-
-        cleanVideoUrl = videoUrl.trim();
+        finalVideoUrl = videoUrl.trim();
       } catch {
         setMessage("Enter a valid video URL.");
         setPosting(false);
@@ -188,7 +211,7 @@ export default function FeedPage() {
       user_id: userId,
       content: content.trim() || null,
       image_url: imageUrl,
-      video_url: cleanVideoUrl,
+      video_url: finalVideoUrl,
     });
 
     setPosting(false);
@@ -200,6 +223,7 @@ export default function FeedPage() {
 
     setContent("");
     setImage(null);
+    setVideo(null);
     setVideoUrl("");
     setShowComposer(false);
     setMessage("Your post was published!");
@@ -234,145 +258,90 @@ export default function FeedPage() {
   }
 
   async function sharePost(post: Post) {
-    const url = window.location.origin + `/post/${post.id}`;
+    const url = `${window.location.origin}/post/${post.id}`;
 
     try {
       if (navigator.share) {
         await navigator.share({
           title: "SoGeon",
-          text: post.content || "Check out this post on SoGeon!",
+          text: post.content || "Check out this SoGeon post!",
           url,
         });
-      } else if (navigator.clipboard) {
+      } else {
         await navigator.clipboard.writeText(url);
         setMessage("Post link copied!");
-      } else {
-        setMessage(url);
       }
     } catch {
-      // Sharing was cancelled or unavailable.
+      // Sharing cancelled.
     }
   }
 
-  const visiblePosts = posts
-    .filter((post) => {
-      if (
-        activeTab === "following" &&
-        post.user_id !== userId &&
-        !followingIds.includes(post.user_id)
-      ) {
-        return false;
-      }
+  const visiblePosts = posts.filter((post) => {
+    if (
+      activeTab === "Following" &&
+      post.user_id !== userId &&
+      !followingIds.includes(post.user_id)
+    ) return false;
 
-      if (search.trim()) {
-        const term = search.toLowerCase();
-        return (
-          (post.content || "").toLowerCase().includes(term) ||
-          (post.profile?.username || "").toLowerCase().includes(term) ||
-          (post.profile?.display_name || "").toLowerCase().includes(term)
-        );
-      }
-
-      return true;
-    })
-    .slice()
-    .sort((a, b) => {
-      if (activeTab === "forYou") {
-        const scoreA =
-          a.likes_count * 3 +
-          a.comments_count * 2;
-        const scoreB =
-          b.likes_count * 3 +
-          b.comments_count * 2;
-
-        if (scoreA !== scoreB) return scoreB - scoreA;
-      }
-
+    if (search.trim()) {
+      const term = search.toLowerCase();
       return (
-        new Date(b.created_at).getTime() -
-        new Date(a.created_at).getTime()
+        (post.content || "").toLowerCase().includes(term) ||
+        (post.profile?.username || "").toLowerCase().includes(term)
       );
-    });
+    }
+
+    return true;
+  });
 
   return (
     <main style={styles.main}>
       <header style={styles.header}>
-        <button
-          onClick={() => setMessage("LIVE streaming is coming soon!")}
-          style={styles.liveButton}
-        >
-          <span style={{ fontSize: 21 }}>▣</span>
-          LIVE
+        <button style={styles.tab} onClick={() => setMessage("LIVE is coming soon!")}>
+          ▣ LIVE
         </button>
 
-        <button
-          onClick={() => setActiveTab("community")}
-          style={{
-            ...styles.tab,
-            opacity: activeTab === "community" ? 1 : 0.65,
-          }}
-        >
+        <button style={styles.tab} onClick={() => setActiveTab("Community")}>
           Community
         </button>
 
-        <button
-          onClick={() => setActiveTab("following")}
-          style={{
-            ...styles.tab,
-            opacity: activeTab === "following" ? 1 : 0.65,
-          }}
-        >
+        <button style={styles.tab} onClick={() => setActiveTab("Following")}>
           Following
         </button>
 
         <button
-          onClick={() => setActiveTab("forYou")}
           style={{
             ...styles.tab,
-            fontWeight: activeTab === "forYou" ? "bold" : "normal",
-            borderBottom:
-              activeTab === "forYou"
-                ? "3px solid white"
-                : "3px solid transparent",
+            fontWeight: activeTab === "For You" ? "bold" : "normal",
+            borderBottom: activeTab === "For You" ? "3px solid white" : "none",
           }}
+          onClick={() => setActiveTab("For You")}
         >
           For You
         </button>
 
-        <button
-          onClick={() => setSearchOpen(!searchOpen)}
-          style={styles.searchButton}
-        >
+        <button style={styles.searchButton} onClick={() => setSearchOpen(!searchOpen)}>
           ⌕
         </button>
       </header>
 
       {searchOpen && (
-        <div style={styles.searchPanel}>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search people and posts..."
-            style={styles.searchInput}
-          />
-        </div>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search posts and users..."
+          style={styles.searchInput}
+        />
       )}
 
       <div style={styles.feed}>
         {loading ? (
-          <div style={styles.empty}>
-            Loading your SoGeon feed...
-          </div>
+          <div style={styles.empty}>Loading SoGeon...</div>
         ) : visiblePosts.length === 0 ? (
           <div style={styles.empty}>
-            <h2>No posts to show yet.</h2>
-            <p>
-              Be the first to share something with the SoGeon community!
-            </p>
-            <button
-              onClick={() => setShowComposer(true)}
-              style={styles.yellowButton}
-            >
+            <h2>Welcome to SoGeon!</h2>
+            <p>Be the first to share a video or post.</p>
+            <button style={styles.yellowButton} onClick={() => setShowComposer(true)}>
               Create a Post
             </button>
           </div>
@@ -386,26 +355,13 @@ export default function FeedPage() {
                   muted
                   loop
                   playsInline
-                  onClick={(e) => {
-                    const video = e.currentTarget;
-                    if (video.paused) {
-                      video.play().catch(() => {});
-                    } else {
-                      video.pause();
-                    }
-                  }}
+                  controls
                   style={styles.media}
                 />
               ) : post.image_url ? (
-                <img
-                  src={post.image_url}
-                  alt="SoGeon post"
-                  style={styles.media}
-                />
+                <img src={post.image_url} alt="SoGeon post" style={styles.media} />
               ) : (
-                <div style={styles.textBackground}>
-                  {post.content}
-                </div>
+                <div style={styles.textBackground}>{post.content}</div>
               )}
 
               <div style={styles.gradient} />
@@ -417,62 +373,35 @@ export default function FeedPage() {
                 >
                   @{post.profile?.username || "sogeon_user"}
                 </Link>
-
-                <p style={styles.postText}>
-                  {post.content || "Sharing on SoGeon ✨"}
-                </p>
-
-                <p style={styles.music}>
-                  ♪ SoGeon Community
-                </p>
+                <p style={styles.postText}>{post.content || "Sharing on SoGeon ✨"}</p>
+                <p style={styles.music}>♪ SoGeon Community</p>
               </div>
 
               <div style={styles.actions}>
-                <Link
-                  href={`/profile/${post.profile?.username || ""}`}
-                  style={styles.avatarLink}
-                >
+                <Link href={`/profile/${post.profile?.username || ""}`}>
                   {post.profile?.avatar_url ? (
-                    <img
-                      src={post.profile.avatar_url}
-                      alt="Profile"
-                      style={styles.avatar}
-                    />
+                    <img src={post.profile.avatar_url} alt="Profile" style={styles.avatar} />
                   ) : (
                     <div style={styles.avatarPlaceholder}>
-                      {(
-                        post.profile?.display_name ||
-                        "S"
-                      ).charAt(0).toUpperCase()}
+                      {(post.profile?.display_name || "S").charAt(0)}
                     </div>
                   )}
                 </Link>
 
-                <button
-                  onClick={() => toggleLike(post)}
-                  style={styles.actionButton}
-                >
+                <button style={styles.actionButton} onClick={() => toggleLike(post)}>
                   <span style={{
-                    fontSize: 35,
+                    fontSize: 36,
                     color: post.liked ? "#ff3040" : "white",
-                  }}>
-                    ♥
-                  </span>
+                  }}>♥</span>
                   <small>{post.likes_count}</small>
                 </button>
 
-                <Link
-                  href={`/post/${post.id}`}
-                  style={styles.actionLink}
-                >
-                  <span style={{ fontSize: 34 }}>●●●</span>
+                <Link href={`/post/${post.id}`} style={styles.actionLink}>
+                  <span style={{ fontSize: 30 }}>●●●</span>
                   <small>{post.comments_count}</small>
                 </Link>
 
-                <button
-                  onClick={() => sharePost(post)}
-                  style={styles.actionButton}
-                >
+                <button style={styles.actionButton} onClick={() => sharePost(post)}>
                   <span style={{ fontSize: 34 }}>➤</span>
                   <small>Share</small>
                 </button>
@@ -484,51 +413,30 @@ export default function FeedPage() {
 
       {message && (
         <div style={styles.message}>
-          <span>{message}</span>
-          <button
-            onClick={() => setMessage("")}
-            style={styles.closeMessage}
-          >
-            ✕
-          </button>
+          {message}
+          <button onClick={() => setMessage("")} style={styles.closeMessage}>✕</button>
         </div>
       )}
 
       <nav style={styles.bottomNav}>
-        <button
-          onClick={() => setActiveTab("forYou")}
-          style={styles.navButton}
-        >
-          <span style={styles.navIcon}>⌂</span>
-          Home
+        <button style={styles.navButton} onClick={() => setActiveTab("For You")}>
+          <span style={styles.navIcon}>⌂</span>Home
         </button>
 
-        <button
-          onClick={() => setActiveTab("following")}
-          style={styles.navButton}
-        >
-          <span style={styles.navIcon}>♧</span>
-          Friends
+        <button style={styles.navButton} onClick={() => setActiveTab("Following")}>
+          <span style={styles.navIcon}>♧</span>Friends
         </button>
 
-        <button
-          onClick={() => setShowComposer(true)}
-          style={styles.plusButton}
-        >
+        <button style={styles.plusButton} onClick={() => setShowComposer(true)}>
           +
         </button>
 
-        <button
-          onClick={() => setMessage("Private messaging is coming next!")}
-          style={styles.navButton}
-        >
-          <span style={styles.navIcon}>▤</span>
-          Inbox
-        </button>
+        <Link href="/messages" style={styles.navLink}>
+          <span style={styles.navIcon}>▤</span>Inbox
+        </Link>
 
         <Link href="/dashboard" style={styles.navLink}>
-          <span style={styles.navIcon}>♙</span>
-          Profile
+          <span style={styles.navIcon}>♙</span>Profile
         </Link>
       </nav>
 
@@ -537,11 +445,7 @@ export default function FeedPage() {
           <form onSubmit={createPost} style={styles.composer}>
             <div style={styles.composerHeader}>
               <h2>Create on SoGeon</h2>
-              <button
-                type="button"
-                onClick={() => setShowComposer(false)}
-                style={styles.closeButton}
-              >
+              <button type="button" onClick={() => setShowComposer(false)} style={styles.closeButton}>
                 ✕
               </button>
             </div>
@@ -553,37 +457,49 @@ export default function FeedPage() {
               style={styles.textarea}
             />
 
-            <label style={styles.label}>
-              Add a photo
-            </label>
-
+            <label style={styles.label}>Add a photo</label>
             <input
               type="file"
               accept="image/jpeg,image/png,image/webp"
-              onChange={(e) =>
-                setImage(e.target.files?.[0] || null)
-              }
+              onChange={(e) => {
+                setImage(e.target.files?.[0] || null);
+                setVideo(null);
+                setVideoUrl("");
+              }}
               style={{ color: "white" }}
             />
 
-            <label style={styles.label}>
-              Or add a direct video URL (.mp4)
-            </label>
+            <label style={styles.label}>Upload a video from your phone</label>
+            <input
+              type="file"
+              accept="video/mp4,video/quicktime,video/webm"
+              onChange={(e) => {
+                setVideo(e.target.files?.[0] || null);
+                setImage(null);
+                setVideoUrl("");
+              }}
+              style={{ color: "white" }}
+            />
 
+            <small style={{ color: "#bbb" }}>
+              MP4, MOV or WEBM · Maximum 50 MB
+            </small>
+
+            <label style={styles.label}>Or add a direct video URL</label>
             <input
               type="url"
               value={videoUrl}
-              onChange={(e) => setVideoUrl(e.target.value)}
+              onChange={(e) => {
+                setVideoUrl(e.target.value);
+                setVideo(null);
+                setImage(null);
+              }}
               placeholder="https://example.com/video.mp4"
               style={styles.videoInput}
             />
 
-            <button
-              disabled={posting}
-              type="submit"
-              style={styles.publishButton}
-            >
-              {posting ? "Publishing..." : "Publish"}
+            <button disabled={posting} type="submit" style={styles.publishButton}>
+              {posting ? "Uploading..." : "Publish"}
             </button>
           </form>
         </div>
@@ -612,24 +528,15 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-around",
-    padding: "0 7px",
+    padding: "0 5px",
     background: "linear-gradient(#0009, transparent)",
-  },
-  liveButton: {
-    color: "white",
-    background: "transparent",
-    border: 0,
-    fontWeight: "bold",
-    display: "grid",
-    fontSize: 11,
-    cursor: "pointer",
   },
   tab: {
     color: "white",
     background: "transparent",
     border: 0,
     padding: "12px 3px",
-    fontSize: 13,
+    fontSize: 12,
     whiteSpace: "nowrap",
     cursor: "pointer",
   },
@@ -637,24 +544,21 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: "white",
     background: "transparent",
     border: 0,
-    fontSize: 34,
-    cursor: "pointer",
-  },
-  searchPanel: {
-    position: "absolute",
-    top: 65,
-    left: 12,
-    right: 12,
-    zIndex: 20,
+    fontSize: 32,
   },
   searchInput: {
-    width: "100%",
+    position: "absolute",
+    top: 70,
+    left: 12,
+    right: 12,
+    width: "calc(100% - 24px)",
+    zIndex: 20,
     padding: 12,
-    borderRadius: 10,
-    boxSizing: "border-box",
     background: "#222",
     color: "white",
     border: "1px solid #666",
+    borderRadius: 9,
+    boxSizing: "border-box",
   },
   feed: {
     height: "100%",
@@ -672,9 +576,9 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   media: {
     position: "absolute",
+    inset: 0,
     width: "100%",
     height: "100%",
-    inset: 0,
     objectFit: "cover",
   },
   textBackground: {
@@ -686,13 +590,13 @@ const styles: { [key: string]: React.CSSProperties } = {
     textAlign: "center",
     fontSize: 30,
     fontWeight: "bold",
-    background: "linear-gradient(140deg, #272727, #111, #343000)",
+    background: "linear-gradient(140deg,#272727,#111,#343000)",
   },
   gradient: {
     position: "absolute",
     inset: 0,
     pointerEvents: "none",
-    background: "linear-gradient(transparent 45%, #000b 85%, #000e)",
+    background: "linear-gradient(transparent 45%,#000b 85%,#000e)",
   },
   caption: {
     position: "absolute",
@@ -711,12 +615,8 @@ const styles: { [key: string]: React.CSSProperties } = {
     color: "white",
     fontSize: 16,
     lineHeight: 1.4,
-    textShadow: "0 1px 3px #000",
   },
-  music: {
-    fontSize: 13,
-    color: "#fff",
-  },
+  music: { fontSize: 13, color: "white" },
   actions: {
     position: "absolute",
     right: 12,
@@ -727,12 +627,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     alignItems: "center",
     gap: 22,
   },
-  avatarLink: {
-    textDecoration: "none",
-  },
   avatar: {
-    width: 50,
-    height: 50,
+    width: 48,
+    height: 48,
     borderRadius: "50%",
     border: "2px solid white",
     objectFit: "cover",
@@ -741,13 +638,11 @@ const styles: { [key: string]: React.CSSProperties } = {
     width: 48,
     height: 48,
     borderRadius: "50%",
-    border: "2px solid white",
-    background: "#d5ad00",
+    background: "#FFD600",
     color: "#111",
     display: "grid",
     placeItems: "center",
     fontSize: 24,
-    fontWeight: "bold",
   },
   actionButton: {
     display: "grid",
@@ -757,7 +652,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: "transparent",
     border: 0,
     cursor: "pointer",
-    textShadow: "0 1px 3px #000",
   },
   actionLink: {
     display: "grid",
@@ -765,7 +659,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     gap: 4,
     color: "white",
     textDecoration: "none",
-    fontSize: 24,
+    fontSize: 20,
   },
   empty: {
     minHeight: "100%",
@@ -775,7 +669,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     alignItems: "center",
     textAlign: "center",
     padding: 30,
-    color: "white",
   },
   yellowButton: {
     background: "#FFD600",
@@ -784,7 +677,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: 9,
     padding: "14px 25px",
     fontWeight: "bold",
-    marginTop: 15,
   },
   message: {
     position: "absolute",
@@ -798,7 +690,6 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: 10,
     display: "flex",
     justifyContent: "space-between",
-    gap: 10,
   },
   closeMessage: {
     color: "white",
@@ -815,8 +706,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     background: "#050505",
     display: "flex",
     justifyContent: "space-around",
-    
-alignItems: "center",
+    alignItems: "center",
     borderTop: "1px solid #333",
     paddingBottom: "env(safe-area-inset-bottom)",
   },
@@ -828,7 +718,6 @@ alignItems: "center",
     justifyItems: "center",
     gap: 3,
     fontSize: 12,
-    cursor: "pointer",
   },
   navLink: {
     color: "white",
@@ -838,10 +727,7 @@ alignItems: "center",
     gap: 3,
     fontSize: 12,
   },
-  navIcon: {
-    fontSize: 27,
-    lineHeight: 1,
-  },
+  navIcon: { fontSize: 27, lineHeight: 1 },
   plusButton: {
     width: 54,
     height: 38,
@@ -853,7 +739,6 @@ alignItems: "center",
     lineHeight: "30px",
     fontWeight: "bold",
     boxShadow: "-4px 0 #25e6e8, 4px 0 #fe2c55",
-    cursor: "pointer",
   },
   modal: {
     position: "absolute",
@@ -874,6 +759,8 @@ alignItems: "center",
     display: "grid",
     gap: 14,
     boxSizing: "border-box",
+    maxHeight: "90dvh",
+    overflowY: "auto",
   },
   composerHeader: {
     display: "flex",
@@ -897,9 +784,10 @@ alignItems: "center",
     padding: 12,
   },
   label: {
+   
     color: "#FFD600",
-    fontWeight: "bold",
     fontSize: 14,
+    fontWeight: "bold",
   },
   videoInput: {
     width: "100%",
@@ -911,13 +799,15 @@ alignItems: "center",
     borderRadius: 9,
   },
   publishButton: {
+    width: "100%",
+    padding: 15,
     background: "#FFD600",
     color: "#000",
-    padding: 14,
     border: 0,
     borderRadius: 9,
     fontWeight: "bold",
+    fontSize: 16,
     cursor: "pointer",
   },
 };
-
+    
